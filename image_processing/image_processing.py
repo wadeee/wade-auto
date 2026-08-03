@@ -7,11 +7,12 @@ INPUT_DIR = Path(__file__).parent / "input"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 FONT_PATH = str(Path(__file__).parent / "fonts" / "PingFang.ttc")
+FONT_INDEX = 7  # PingFang SC Medium(稍加粗);7=Medium,3=Regular,11=Semibold
 TEXT_COLOR = (40, 40, 40)
 
 # (文本, 左边距x, 行顶部y, 行高) —— 基于 1206x2622 的图片测得的固定位置
 LINES = [
-    ("2026年8月21日 19:16:31", 360, 1405, 37),
+    ("2026年7月20日 17:15:29", 360, 1405, 37),
     ("4500000292202607306641838414", 360, 1828, 31),
     ("2026073017150345719", 360, 1912, 31),
 ]
@@ -20,12 +21,12 @@ LINES = [
 def fit_font(text: str, target_height: int):
     size = target_height
     for _ in range(10):
-        font = ImageFont.truetype(FONT_PATH, size)
+        font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
         h = font.getbbox(text)[3] - font.getbbox(text)[1]
         if abs(h - target_height) <= 1:
             break
         size = max(1, round(size * target_height / h))
-    return ImageFont.truetype(FONT_PATH, size)
+    return ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
 
 
 def process(path: Path, out_path: Path):
