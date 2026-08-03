@@ -6,27 +6,84 @@ from PIL import Image, ImageDraw, ImageFont
 INPUT_DIR = Path(__file__).parent / "input"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
-FONT_PATH = str(Path(__file__).parent / "fonts" / "PingFang.ttc")
-FONT_INDEX = 7  # PingFang SC Medium(稍加粗);7=Medium,3=Regular,11=Semibold
+SF_FONT_PATH = str(Path(__file__).parent / "fonts" / "SFNS.ttf")      # 英文/数字
+PF_FONT_PATH = str(Path(__file__).parent / "fonts" / "PingFang.ttc")  # 中文
+FONT_WEIGHT = "Regular"  # 可选: Regular / Medium / Semibold
+PF_INDEX = {"Regular": 3, "Medium": 7, "Semibold": 11}  # PingFang SC 各字重的 face 索引
 TEXT_COLOR = (40, 40, 40)
 
 # (文本, 左边距x, 行顶部y, 行高) —— 基于 1206x2622 的图片测得的固定位置
 LINES = [
-    ("2026年7月20日 17:15:29", 360, 1405, 37),
-    ("4500000292202607306641838414", 360, 1828, 31),
-    ("2026073017150345719", 360, 1912, 31),
+    ("2026年7月20日 17:15:29", 360, 1405, 41),
+    ("4500000292202607306641838414", 360, 1828, 32),
+    ("2026073017150345719", 360, 1912, 32),
 ]
 
 
-def fit_font(text: str, target_height: int):
+def is_cjk(ch: str) -> bool:
+    return ord(ch) >= 0x2E80
+
+
+def split_runs(text: str):
+    """把文本按 中文/非中文 切分为若干段: [(片段, 是否中文), ...]"""
+    runs = []
+    for ch in text:
+        cjk = is_cjk(ch)
+        print(ch, cjk)
+        if runs and runs[-1][1] == cjk:
+            runs[-1][0] += ch
+        else:
+            runs.append([ch, cjk])
+    return [(s, c) for s, c in runs]
+
+
+def load_fonts(size: int):
+    sf = ImageFont.truetype(SF_FONT_PATH, size)
+    sf.set_variation_by_name(FONT_WEIGHT)
+    pf = ImageFont.truetype(PF_FONT_PATH, size, index=PF_INDEX[FONT_WEIGHT])
+    return sf, pf
+
+
+def line_metrics(runs, sf, pf):
+    """返回整行相对基线的 (top, bottom)。top 为负值。"""
+    top, bottom = 0, 0
+    for run, cjk in runs:
+        font = pf if cjk else sf
+        ascent, _ = font.getmetrics()
+        bbox = font.getbbox(run)
+        top = min(top, bbox[1] - ascent)
+        bottom = max(bottom, bbox[3] - ascent)
+    return top, bottom
+
+
+def fit_fonts(runs, target_height: int):
+    """找到使整行渲染高度接近 target_height 的字号。"""
     size = target_height
     for _ in range(10):
-        font = ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
-        h = font.getbbox(text)[3] - font.getbbox(text)[1]
+        sf, pf = load_fonts(size)
+        top, bottom = line_metrics(runs, sf, pf)
+        h = bottom - top
         if abs(h - target_height) <= 1:
             break
         size = max(1, round(size * target_height / h))
-    return ImageFont.truetype(FONT_PATH, size, index=FONT_INDEX)
+    return load_fonts(size)
+
+
+def draw_mixed_text(draw: ImageDraw.ImageDraw, text: str, x: int, y: int, target_height: int):
+    """中英文分别用 PingFang / SFNS 渲染,按基线对齐,整行顶部对齐到 y。"""
+    runs = split_runs(text)
+    sf, pf = fit_fonts(runs, target_height)
+    top, _ = line_metrics(runs, sf, pf)
+    baseline = y - top
+
+    cursor = float(x)
+    for i, (run, cjk) in enumerate(runs):
+        font = pf if cjk else sf
+        ascent, _ = font.getmetrics()
+        if i == 0:
+            cursor -= font.getbbox(run)[0]  # 首段左边缘精确对齐 x
+        draw.text((cursor, baseline - ascent), run, font=font, fill=TEXT_COLOR)
+        cursor += font.getlength(run)
 
 
 def process(path: Path, out_path: Path):
@@ -34,12 +91,8 @@ def process(path: Path, out_path: Path):
     draw = ImageDraw.Draw(img)
 
     for text, x, y, h in LINES:
-        # 擦除该行原文本(从左边距到图片右侧)
         draw.rectangle([x - 4, y - 6, img.width - 20, y + h + 6], fill=(255, 255, 255))
-        # 绘制新文本,保持原左边距和字高
-        font = fit_font(text, h)
-        tb = font.getbbox(text)
-        draw.text((x - tb[0], y - tb[1]), text, font=font, fill=TEXT_COLOR)
+        draw_mixed_text(draw, text, x, y, h)
 
     img.save(out_path, quality=95)
     print(f"完成: {path.name} -> {out_path}")
