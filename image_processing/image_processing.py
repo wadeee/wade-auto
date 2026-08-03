@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 INPUT_DIR = Path(__file__).parent / "input"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
-FONT_PATH = r"C:\Windows\Fonts\msyh.ttc"
+FONT_PATH = str(Path(__file__).parent / "fonts" / "PingFang.ttc")
 TEXT_COLOR = (40, 40, 40)
 
 # (文本, 左边距x, 行顶部y, 行高) —— 基于 1206x2622 的图片测得的固定位置
