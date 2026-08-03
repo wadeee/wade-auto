@@ -29,7 +29,6 @@ def split_runs(text: str):
     runs = []
     for ch in text:
         cjk = is_cjk(ch)
-        print(ch, cjk)
         if runs and runs[-1][1] == cjk:
             runs[-1][0] += ch
         else:
