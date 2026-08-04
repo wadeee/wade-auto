@@ -3,8 +3,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-INPUT_DIR = Path(__file__).parent / "input"
-OUTPUT_DIR = Path(__file__).parent / "output"
+INPUT_DIR = Path(__file__).parent / "zfb" / "input"
+OUTPUT_DIR = Path(__file__).parent / "zfb" / "output"
 
 SF_FONT_PATH = str(Path(__file__).parent / "fonts" / "SFNS.ttf")      # 英文/数字
 PF_FONT_PATH = str(Path(__file__).parent / "fonts" / "PingFang.ttc")  # 中文
