@@ -14,9 +14,9 @@ TEXT_COLOR = (40, 40, 40)
 
 # (文本, 左边距x, 行顶部y, 行高) —— 基于 1206x2622 的图片测得的固定位置
 LINES = [
-    ("2026-07-25 20:31:32", 382, 923, 32),
-    ("2026072522001433981436519212", 382, 1716, 30),
-    ("2026072520310630000", 382, 1818, 30),
+    ("2026-07-25 20:31:32", 379, 927, 32),
+    ("2026072522001433981436519212", 380, 1716, 30),
+    ("2026072520310630000", 380, 1818, 30),
 ]
 
 
@@ -90,7 +90,7 @@ def process(path: Path, out_path: Path):
     draw = ImageDraw.Draw(img)
 
     for text, x, y, h in LINES:
-        draw.rectangle([x - 4, y - 6, img.width - 20, y + h + 6], fill=(255, 255, 255))
+        draw.rectangle([x - 4, y - 6, img.width - 80, y + h + 6], fill=(255, 255, 255))
         draw_mixed_text(draw, text, x, y, h)
 
     img.save(out_path, quality=95)
