@@ -3,14 +3,18 @@
 """倒计时提醒 —— 一个始终置顶的 10 / 15 / 20 秒倒计时小工具。
 
 倒计时结束时弹出提醒，提醒 3 秒后自动消失。
+全局快捷键：小键盘连按 1 / 2 / 3 五次，分别启动 10 / 15 / 20 秒倒计时。
 运行：python timer.py
 """
 
 import ctypes
 import math
+import queue
 import sys
+import threading
 import time
 import tkinter as tk
+from ctypes import wintypes
 from tkinter import font as tkfont
 
 try:
@@ -33,6 +37,22 @@ HOVERS = {10: "#6a9fff", 15: "#47d7a0", 20: "#ffb84d"}
 FONT = "Microsoft YaHei UI"
 POPUP_MS = 3000
 
+# ---------------------------------------------------------------- 全局快捷键
+# 小键盘连按 1 / 2 / 3 五次，分别启动 10 / 15 / 20 秒倒计时
+# VK_NUMPAD1 / VK_NUMPAD2 / VK_NUMPAD3；大键盘数字行不参与
+TRIGGER_VKS = {0x61: 10, 0x62: 15, 0x63: 20}
+# NumLock 关闭时，小键盘 1/2/3 会变成 End / Down / PageDown（无扩展键标志）。
+# 映射为：虚拟键 -> (扫描码, 小键盘虚拟键)
+NUMPAD_NUMLOCK_OFF = {
+    0x23: (0x4F, 0x61),  # End      -> 小键盘 1
+    0x28: (0x50, 0x62),  # Down     -> 小键盘 2
+    0x22: (0x51, 0x63),  # PageDown -> 小键盘 3
+}
+LLKHF_EXTENDED = 0x01     # 方向键、编辑键区的 End/PageDown 会带这个标志
+HOTKEY_PRESSES = 5
+HOTKEY_GAP = 1.0          # 相邻两次按键的最大间隔（秒）
+HOTKEYS_SUPPORTED = sys.platform == "win32"
+
 
 def enable_dpi_awareness() -> None:
     """让窗口在高分屏上保持清晰。"""
@@ -45,6 +65,185 @@ def enable_dpi_awareness() -> None:
             ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+
+
+# ------------------------------------------------------- Windows 键盘钩子
+WH_KEYBOARD_LL = 13
+HC_ACTION = 0
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+WM_QUIT = 0x0012
+MODIFIER_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # Shift / Ctrl / Alt / Win
+
+if HOTKEYS_SUPPORTED:
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class _KBDLLHOOKSTRUCT(ctypes.Structure):
+        _fields_ = [
+            ("vkCode", wintypes.DWORD),
+            ("scanCode", wintypes.DWORD),
+            ("flags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    _HOOKPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+    )
+
+    _user32.SetWindowsHookExW.argtypes = [
+        ctypes.c_int, _HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD
+    ]
+    _user32.SetWindowsHookExW.restype = ctypes.c_void_p
+    _user32.CallNextHookEx.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+    ]
+    _user32.CallNextHookEx.restype = ctypes.c_ssize_t
+    _user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+    _user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+    _user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    _user32.GetAsyncKeyState.restype = ctypes.c_short
+    _user32.GetMessageW.argtypes = [
+        ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+        wintypes.UINT, wintypes.UINT,
+    ]
+    _user32.GetMessageW.restype = ctypes.c_int
+    _user32.PeekMessageW.argtypes = [
+        ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+        wintypes.UINT, wintypes.UINT, wintypes.UINT,
+    ]
+    _user32.PeekMessageW.restype = wintypes.BOOL
+    _user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.DispatchMessageW.restype = ctypes.c_ssize_t
+    _user32.PostThreadMessageW.argtypes = [
+        wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+    ]
+    _user32.PostThreadMessageW.restype = wintypes.BOOL
+    _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    _kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+
+class HotkeyListener:
+    """全局监听连按：连续按下同一个数字 5 次即触发对应时长。"""
+
+    def __init__(self, triggers):
+        self.triggers = triggers
+        self.queue = queue.Queue()
+        self._thread = None
+        self._thread_id = 0
+        self._hook = None
+        self._hook_proc = None
+        self._ready = threading.Event()
+        self._stopping = threading.Event()
+        self._down = set()
+        self._seq_key = None
+        self._seq_count = 0
+        self._seq_last = 0.0
+
+    def start(self):
+        if not HOTKEYS_SUPPORTED:
+            return
+        self._thread = threading.Thread(target=self._run, name="hotkeys",
+                                        daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stopping.set()
+        if self._thread_id:
+            _user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+        if (self._thread is not None and self._thread.is_alive()
+                and self._thread is not threading.current_thread()):
+            self._thread.join(timeout=1.0)
+
+    def _run(self):
+        self._thread_id = _kernel32.GetCurrentThreadId()
+        if self._stopping.is_set():
+            return
+
+        # 先创建线程消息队列，保证 PostThreadMessage 能找到它
+        msg = wintypes.MSG()
+        _user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+
+        self._hook_proc = _HOOKPROC(self._on_key_event)
+        self._hook = _user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, self._hook_proc,
+            _kernel32.GetModuleHandleW(None), 0,
+        )
+        self._ready.set()
+        if not self._hook:
+            return
+
+        try:
+            while True:
+                ret = _user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if ret in (0, -1):
+                    break
+                _user32.TranslateMessage(ctypes.byref(msg))
+                _user32.DispatchMessageW(ctypes.byref(msg))
+        finally:
+            _user32.UnhookWindowsHookEx(self._hook)
+            self._hook = None
+
+    def _on_key_event(self, n_code, w_param, l_param):
+        try:
+            if n_code == HC_ACTION:
+                info = ctypes.cast(
+                    l_param, ctypes.POINTER(_KBDLLHOOKSTRUCT)
+                ).contents
+                vk = self._normalize_vk(info.vkCode, info.scanCode, info.flags)
+                if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    self._key_down(vk)
+                elif w_param in (WM_KEYUP, WM_SYSKEYUP):
+                    self._down.discard(vk)
+        except Exception:
+            pass  # 钩子回调中绝不能抛出异常，否则会卡住键盘
+        return _user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    @staticmethod
+    def _normalize_vk(vk, scan_code, flags):
+        """NumLock 关闭时把小键盘键还原成数字键（排除方向键/编辑键区）。"""
+        if not flags & LLKHF_EXTENDED:
+            mapped = NUMPAD_NUMLOCK_OFF.get(vk)
+            if mapped and scan_code == mapped[0]:
+                return mapped[1]
+        return vk
+
+    def _key_down(self, vk):
+        if vk in self._down:
+            return  # 按住不放产生的自动重复，不算一次按键
+        self._down.add(vk)
+
+        if vk not in self.triggers:
+            self._reset_sequence()
+            return
+
+        # 带 Shift/Ctrl/Alt/Win 的组合键不算，避免输入符号时误触
+        if any(_user32.GetAsyncKeyState(m) & 0x8000 for m in MODIFIER_VKS):
+            self._reset_sequence()
+            return
+
+        now = time.monotonic()
+        if vk == self._seq_key and now - self._seq_last <= HOTKEY_GAP:
+            self._seq_count += 1
+        else:
+            self._seq_key = vk
+            self._seq_count = 1
+        self._seq_last = now
+
+        if self._seq_count >= HOTKEY_PRESSES:
+            seconds = self.triggers[vk]
+            self._reset_sequence()
+            self.queue.put_nowait(seconds)
+
+    def _reset_sequence(self):
+        self._seq_key = None
+        self._seq_count = 0
+        self._seq_last = 0.0
 
 
 class CountdownApp:
@@ -60,6 +259,7 @@ class CountdownApp:
         self._hover = None
         self._timer_job = None
         self._reminder_job = None
+        self._hotkey_job = None
         self._popup = None
 
         root.title("倒计时提醒")
@@ -71,6 +271,10 @@ class CountdownApp:
         self._build_ui()
         root.update_idletasks()
         self._place_window()
+
+        self._hotkeys = HotkeyListener(TRIGGER_VKS)
+        self._hotkeys.start()
+        self._hotkey_job = root.after(50, self._poll_hotkeys)
 
     # -------------------------------------------------------------- 界面
     def _px(self, value):
@@ -135,6 +339,12 @@ class CountdownApp:
             btn.bind("<Enter>", lambda _e, s=secs: self._set_hover(s))
             btn.bind("<Leave>", lambda _e: self._set_hover(None))
             self.buttons[secs] = btn
+
+        if HOTKEYS_SUPPORTED:
+            for col, key in enumerate("123"):
+                tk.Label(row, text=f"小键盘连按 {key} 五次", bg=BG, fg=DIM,
+                         font=(FONT, 8)).grid(row=1, column=col,
+                                              pady=(px(7), 0))
 
         self.stop_btn = tk.Button(
             body, text="停止", command=self.stop,
@@ -357,10 +567,30 @@ class CountdownApp:
             except Exception:
                 pass
 
+    def _poll_hotkeys(self) -> None:
+        """在 Tk 主线程里取钩子线程收到的快捷键事件。"""
+        self._hotkey_job = None
+        try:
+            while True:
+                seconds = self._hotkeys.queue.get_nowait()
+                self.root.deiconify()
+                self.root.lift()
+                self.start(seconds)
+        except queue.Empty:
+            pass
+        self._hotkey_job = self.root.after(50, self._poll_hotkeys)
+
     def close(self) -> None:
         self._cancel_timer()
         self._cancel_reminder()
         self._close_popup()
+        if self._hotkey_job is not None:
+            try:
+                self.root.after_cancel(self._hotkey_job)
+            except tk.TclError:
+                pass
+            self._hotkey_job = None
+        self._hotkeys.stop()
         self.root.destroy()
 
 
