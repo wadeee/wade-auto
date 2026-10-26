@@ -12,6 +12,6 @@ PyInstaller.__main__.run([
     "--clean",
     "--onefile",
     "--noconsole",
-    "--name", "倒计时提醒",
+    "--name", "timer",
     "timer.py",
 ])

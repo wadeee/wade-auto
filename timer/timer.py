@@ -3,7 +3,7 @@
 """倒计时提醒 —— 一个始终置顶的 10 / 15 / 20 秒倒计时小工具。
 
 倒计时结束时弹出提醒，提醒 3 秒后自动消失。
-全局快捷键：小键盘连按 1 / 2 / 3 五次，分别启动 10 / 15 / 20 秒倒计时。
+全局快捷键：小键盘连按 1 / 2 / 3 三次，分别启动 10 / 15 / 20 秒倒计时。
 运行：python timer.py
 """
 
@@ -38,7 +38,7 @@ FONT = "Microsoft YaHei UI"
 POPUP_MS = 3000
 
 # ---------------------------------------------------------------- 全局快捷键
-# 小键盘连按 1 / 2 / 3 五次，分别启动 10 / 15 / 20 秒倒计时
+# 小键盘连按 1 / 2 / 3 三次，分别启动 10 / 15 / 20 秒倒计时
 # VK_NUMPAD1 / VK_NUMPAD2 / VK_NUMPAD3；大键盘数字行不参与
 TRIGGER_VKS = {0x61: 10, 0x62: 15, 0x63: 20}
 # NumLock 关闭时，小键盘 1/2/3 会变成 End / Down / PageDown（无扩展键标志）。
@@ -49,7 +49,7 @@ NUMPAD_NUMLOCK_OFF = {
     0x22: (0x51, 0x63),  # PageDown -> 小键盘 3
 }
 LLKHF_EXTENDED = 0x01     # 方向键、编辑键区的 End/PageDown 会带这个标志
-HOTKEY_PRESSES = 5
+HOTKEY_PRESSES = 3
 HOTKEY_GAP = 1.0          # 相邻两次按键的最大间隔（秒）
 HOTKEYS_SUPPORTED = sys.platform == "win32"
 
@@ -129,7 +129,7 @@ if HOTKEYS_SUPPORTED:
 
 
 class HotkeyListener:
-    """全局监听连按：连续按下同一个数字 5 次即触发对应时长。"""
+    """全局监听连按：连续按下同一个数字 3 次即触发对应时长。"""
 
     def __init__(self, triggers):
         self.triggers = triggers
@@ -342,7 +342,8 @@ class CountdownApp:
 
         if HOTKEYS_SUPPORTED:
             for col, key in enumerate("123"):
-                tk.Label(row, text=f"小键盘连按 {key} 五次", bg=BG, fg=DIM,
+                tk.Label(row, text=f"小键盘 {key} 连按 {HOTKEY_PRESSES} 次",
+                         bg=BG, fg=DIM,
                          font=(FONT, 8)).grid(row=1, column=col,
                                               pady=(px(7), 0))
 
